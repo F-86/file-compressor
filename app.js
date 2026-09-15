@@ -40,6 +40,7 @@
     archivePasswordConfirm: $("#archive-password-confirm"),
     toggleArchivePassword: $("#toggle-archive-password"),
     largeFileNotice: $("#large-file-notice"),
+    largeFileCopy: $("#large-file-copy"),
     compressButton: $("#compress-button"),
     selectedArchive: $("#selected-archive"),
     extractPasswordBox: $("#extract-password-box"),
@@ -118,21 +119,28 @@
       panel.classList.toggle("active", active);
       panel.hidden = !active;
     });
+    elements.tabs.forEach((tab) => tab.setAttribute("tabindex", tab.dataset.mode === mode ? "0" : "-1"));
     hideMessage();
     hideProgress();
   }
 
   function setBusy(button, busy, label) {
     button.disabled = busy;
+    button.setAttribute("aria-busy", String(busy));
     const text = button.querySelector(".button-label");
     if (text) text.textContent = busy ? label : button.id === "compress-button" ? "开始压缩" : "解压并下载全部";
     button.style.opacity = busy ? "0.72" : "1";
+    if (button.id === "extract-button") {
+      elements.extractFolderButton.disabled = busy;
+      elements.extractFolderButton.style.opacity = busy ? "0.72" : "1";
+    }
   }
 
   function showMessage(text, type = "success") {
     elements.messageText.textContent = text;
     elements.message.classList.toggle("error", type === "error");
     elements.messageIcon.textContent = type === "error" ? "!" : "✓";
+    elements.message.setAttribute("role", type === "error" ? "alert" : "status");
     elements.message.classList.remove("hidden");
   }
 
@@ -152,6 +160,7 @@
     const value = Math.max(0, Math.min(100, Math.round(percent)));
     elements.progressPercent.textContent = `${value}%`;
     elements.progressBar.style.width = `${value}%`;
+    elements.progressBar.setAttribute("aria-valuenow", String(value));
   }
 
   function hideProgress() {
@@ -175,6 +184,18 @@
       error.code = "CANCELLED";
       throw error;
     }
+  }
+
+  function yieldToBrowser() {
+    return new Promise((resolve) => {
+      if (typeof window.requestIdleCallback === "function") window.requestIdleCallback(resolve, { timeout: 120 });
+      else window.setTimeout(resolve, 0);
+    });
+  }
+
+  function releaseEntries(entries) {
+    entries.forEach((entry) => { entry.data = null; });
+    entries.length = 0;
   }
 
   function cancelOperation() {
@@ -272,7 +293,7 @@
           <div class="file-path" title="${escapeHtml(entry.name)}">${escapeHtml(entry.name)}</div>
         </div>
         <span class="file-size">${formatBytes(entrySize(entry))}</span>
-        <button class="file-action" type="button" data-entry-index="${index}">下载</button>
+        <button class="file-action" type="button" data-entry-index="${index}" aria-label="下载 ${escapeHtml(entry.name)}">下载</button>
       `;
       row.querySelector(".file-action").addEventListener("click", () => extractSingle(index));
       elements.extractList.appendChild(row);
@@ -282,7 +303,13 @@
   function syncCompressArea() {
     elements.compressArea.classList.toggle("hidden", state.files.length === 0);
     const totalBytes = state.files.reduce((sum, file) => sum + file.size, 0);
-    elements.largeFileNotice.classList.toggle("hidden", totalBytes < LARGE_FILE_BYTES);
+    const large = totalBytes >= LARGE_FILE_BYTES;
+    elements.largeFileNotice.classList.toggle("hidden", !large);
+    if (large) {
+      const deviceMemory = Number(navigator.deviceMemory);
+      const deviceHint = Number.isFinite(deviceMemory) && deviceMemory > 0 ? `当前设备约有 ${deviceMemory} GB 内存可供浏览器使用。` : "不同浏览器可用内存不同。";
+      elements.largeFileCopy.textContent = `文件总量较大，浏览器会使用后台压缩；请保持页面打开，最终文件仍会占用一定内存。${deviceHint}`;
+    }
   }
 
   function syncExtractArea() {
@@ -317,6 +344,7 @@
       const data = new Uint8Array(await file.arrayBuffer());
       entries.push({ name: filePath(file), data });
       setProgress(5 + ((index + 1) / state.files.length) * 22);
+      await yieldToBrowser();
     }
     return entries;
   }
@@ -361,8 +389,9 @@
     hideMessage();
     setBusy(elements.compressButton, true, "正在压缩…");
     showProgress("正在准备文件…", "文件不会上传，压缩过程在本地浏览器中完成。");
+    let entries = [];
     try {
-      const entries = await readFiles();
+      entries = await readFiles();
       checkCancelled();
       const level = Number(elements.compressionLevel.value);
       const setCancel = (cancel) => { state.operationCancel = cancel; };
@@ -371,20 +400,24 @@
       if (format === "zip-password") {
         bytes = await window.LightPressureCodecs.createPasswordZip(entries, password, level, setCancel, (percent) => {
           setProgress(27 + percent * 0.73);
-        });
+        }, (entry) => { entry.data = null; });
       } else if (format === "zip") {
         bytes = await window.LightPressureCodecs.createZip(entries, level, setCancel);
+        releaseEntries(entries);
         setProgress(100);
       } else if (format === "tar") {
         bytes = window.LightPressureCodecs.createTar(entries);
+        releaseEntries(entries);
         setProgress(100);
       } else if (format === "tar-gz") {
         const tarBytes = window.LightPressureCodecs.createTar(entries);
+        releaseEntries(entries);
         setProgress(35);
         bytes = await window.LightPressureCodecs.createGzip(tarBytes, `${safeArchiveName(elements.archiveName.value)}.tar`, level, setCancel);
         setProgress(100);
       } else {
         bytes = await window.LightPressureCodecs.createGzip(entries[0].data, entries[0].name, level, setCancel);
+        releaseEntries(entries);
         extension = ".gz";
         setProgress(100);
       }
@@ -394,9 +427,11 @@
     } catch (error) {
       if (error.code !== "CANCELLED") showMessage(`压缩失败：${error.message || "请稍后重试"}`, "error");
     } finally {
+      const wasCancelled = state.cancelled;
+      releaseEntries(entries);
       setBusy(elements.compressButton, false, "开始压缩");
       finishOperation();
-      if (!state.cancelled) window.setTimeout(hideProgress, 1100);
+      if (!wasCancelled) window.setTimeout(hideProgress, 1100);
     }
   }
 
@@ -500,8 +535,9 @@
     } catch (error) {
       if (error.code !== "CANCELLED") showMessage(error.message || "这个文件无法解压。", "error");
     } finally {
+      const wasCancelled = state.cancelled;
       finishOperation();
-      window.setTimeout(hideProgress, 900);
+      if (!wasCancelled) window.setTimeout(hideProgress, 900);
     }
   }
 
@@ -533,15 +569,17 @@
         }
         setProgress(((index + 1) / entries.length) * 100);
         elements.progressDetail.textContent = `已处理 ${index + 1} / ${entries.length} 个文件`;
+        await yieldToBrowser();
       }
       showMessage(rootHandle ? "解压完成，文件已保存到你选择的文件夹。" : "解压完成，文件已开始分别下载。");
     } catch (error) {
       if (error.name === "AbortError") showMessage("已取消选择保存文件夹。", "error");
       else if (error.code !== "CANCELLED") showMessage(error.message || "解压失败，请检查密码或文件完整性。", "error");
     } finally {
+      const wasCancelled = state.cancelled;
       setBusy(elements.extractButton, false, "解压并下载全部");
       finishOperation();
-      window.setTimeout(hideProgress, 1100);
+      if (!wasCancelled) window.setTimeout(hideProgress, 1100);
     }
   }
 
@@ -565,15 +603,19 @@
     zone.addEventListener("click", (event) => {
       if (!event.target.closest("button")) input.click();
     });
-    zone.addEventListener("keydown", (event) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        input.click();
-      }
-    });
   }
 
-  elements.tabs.forEach((tab) => tab.addEventListener("click", () => setMode(tab.dataset.mode)));
+  elements.tabs.forEach((tab, index) => {
+    tab.addEventListener("click", () => setMode(tab.dataset.mode));
+    tab.addEventListener("keydown", (event) => {
+      if (!["ArrowRight", "ArrowDown", "ArrowLeft", "ArrowUp", "Home", "End"].includes(event.key)) return;
+      event.preventDefault();
+      const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? elements.tabs.length - 1 : (index + (event.key === "ArrowRight" || event.key === "ArrowDown" ? 1 : -1) + elements.tabs.length) % elements.tabs.length;
+      const nextTab = elements.tabs[nextIndex];
+      setMode(nextTab.dataset.mode);
+      nextTab.focus();
+    });
+  });
   elements.chooseFiles.addEventListener("click", () => elements.compressInput.click());
   elements.chooseFolder.addEventListener("click", () => elements.folderInput.click());
   elements.chooseArchive.addEventListener("click", () => elements.extractInput.click());
@@ -598,6 +640,7 @@
 
   wireDropZone(elements.compressDrop, elements.compressInput, addFiles);
   wireDropZone(elements.extractDrop, elements.extractInput, (files) => loadArchive(files[0]));
+  setMode(state.mode);
   updateFormatUI();
 
   if ("serviceWorker" in navigator && (location.protocol === "https:" || location.hostname === "localhost")) {

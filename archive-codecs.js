@@ -511,7 +511,7 @@
     return output;
   }
 
-  async function createPasswordZip(entries, password, level, setCancelCallback, onProgress) {
+  async function createPasswordZip(entries, password, level, setCancelCallback, onProgress, releaseEntry) {
     if (!password) throw errorWithCode("PASSWORD_REQUIRED", "请输入压缩密码");
     const localParts = [];
     const centralParts = [];
@@ -564,6 +564,7 @@
       centralParts.push(central);
       offset += local.length;
       if (typeof onProgress === "function") onProgress(((index + 1) / entries.length) * 90);
+      if (typeof releaseEntry === "function") releaseEntry(entry);
     }
     const centralBytes = concatBytes(centralParts);
     const end = new Uint8Array(22);
