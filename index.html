@@ -4,17 +4,8 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="theme-color" content="#101827" />
-    <meta
-      name="description"
-      content="在浏览器本地压缩和解压 ZIP 文件，不上传文件。"
-    />
+    <meta name="description" content="在浏览器本地压缩和解压文件，不上传文件。" />
     <title>轻压 · 本地文件压缩工具</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700;800&display=swap"
-      rel="stylesheet"
-    />
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
@@ -24,55 +15,27 @@
     <header class="site-header shell">
       <a class="brand" href="./" aria-label="轻压首页">
         <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 32 32" role="img">
-            <path d="M16 4v15m0 0 6-6m-6 6-6-6M7 23.5h18" />
-          </svg>
+          <svg viewBox="0 0 32 32" role="img"><path d="M16 4v15m0 0 6-6m-6 6-6-6M7 23.5h18" /></svg>
         </span>
-        <span>
-          <strong>轻压</strong>
-          <small>LOCAL FILE TOOL</small>
-        </span>
+        <span><strong>轻压</strong><small>LOCAL FILE TOOL</small></span>
       </a>
-      <div class="privacy-chip">
-        <span class="status-dot" aria-hidden="true"></span>
-        文件不离开设备
-      </div>
+      <div class="privacy-chip"><span class="status-dot" aria-hidden="true"></span>文件不离开设备</div>
     </header>
 
     <main class="shell main-content">
       <section class="hero" aria-labelledby="page-title">
         <p class="eyebrow">A QUIET, PRIVATE WORKSPACE</p>
         <h1 id="page-title">压缩文件，<em>轻松一点。</em></h1>
-        <p class="hero-copy">
-          选择文件，剩下的交给浏览器。轻压在本地完成处理，不上传、不留存，适合临时整理文件。
-        </p>
+        <p class="hero-copy">选择文件，剩下的交给浏览器。轻压在本地完成处理，不上传、不留存，适合临时整理文件。</p>
       </section>
 
       <section class="tool-card" aria-label="文件压缩工具">
         <div class="mode-switch" role="tablist" aria-label="选择操作">
-          <button
-            class="mode-tab active"
-            id="compress-tab"
-            role="tab"
-            aria-selected="true"
-            aria-controls="compress-panel"
-            type="button"
-            data-mode="compress"
-          >
-            <span class="tab-icon" aria-hidden="true">↘</span>
-            压缩文件
+          <button class="mode-tab active" id="compress-tab" role="tab" aria-selected="true" aria-controls="compress-panel" type="button" data-mode="compress">
+            <span class="tab-icon" aria-hidden="true">↘</span>压缩文件
           </button>
-          <button
-            class="mode-tab"
-            id="extract-tab"
-            role="tab"
-            aria-selected="false"
-            aria-controls="extract-panel"
-            type="button"
-            data-mode="extract"
-          >
-            <span class="tab-icon" aria-hidden="true">↗</span>
-            解压 ZIP
+          <button class="mode-tab" id="extract-tab" role="tab" aria-selected="false" aria-controls="extract-panel" type="button" data-mode="extract">
+            <span class="tab-icon" aria-hidden="true">↗</span>解压文件
           </button>
         </div>
 
@@ -82,9 +45,7 @@
             <input id="folder-input" type="file" webkitdirectory directory multiple hidden />
             <div class="drop-illustration" aria-hidden="true">
               <span class="spark spark-left">✦</span>
-              <span class="upload-orb">
-                <svg viewBox="0 0 48 48"><path d="M24 33V13m0 0-8 8m8-8 8 8M10 37h28" /></svg>
-              </span>
+              <span class="upload-orb"><svg viewBox="0 0 48 48"><path d="M24 33V13m0 0-8 8m8-8 8 8M10 37h28" /></svg></span>
               <span class="spark spark-right">·</span>
             </div>
             <h2>把文件拖到这里</h2>
@@ -97,103 +58,102 @@
 
           <div class="file-area hidden" id="compress-file-area">
             <div class="section-heading">
-              <div>
-                <p class="section-kicker">READY TO PACK</p>
-                <h2>待压缩文件 <span class="count-pill" id="compress-count">0</span></h2>
-              </div>
+              <div><p class="section-kicker">READY TO PACK</p><h2>待压缩文件 <span class="count-pill" id="compress-count">0</span></h2></div>
               <button class="text-button" id="clear-compress" type="button">全部清除</button>
             </div>
+            <p class="summary-line" id="compress-summary"></p>
             <div class="file-list" id="compress-file-list" aria-live="polite"></div>
-            <div class="settings-row">
-              <label class="field-label" for="archive-name">压缩包名称</label>
-              <div class="archive-name-field">
-                <input id="archive-name" type="text" value="轻压文件" maxlength="80" autocomplete="off" />
-                <span>.zip</span>
-              </div>
+
+            <div class="settings-row settings-row-compress">
+              <label class="field-label" for="archive-format">输出格式</label>
+              <select id="archive-format">
+                <option value="zip" selected>ZIP · 通用</option>
+                <option value="zip-password">ZIP · 密码保护</option>
+                <option value="tar-gz">TAR.GZ · 多文件</option>
+                <option value="tar">TAR · 多文件</option>
+                <option value="gzip">GZIP · 单文件</option>
+              </select>
               <label class="field-label" for="compression-level">压缩级别</label>
               <select id="compression-level">
                 <option value="1">快速</option>
                 <option value="6" selected>平衡</option>
                 <option value="9">极致</option>
               </select>
+              <label class="field-label" for="archive-name">文件名</label>
+              <div class="archive-name-field"><input id="archive-name" type="text" value="轻压文件" maxlength="80" autocomplete="off" /><span id="archive-extension">.zip</span></div>
             </div>
-            <button class="button button-primary button-wide" id="compress-button" type="button">
-              <span class="button-label">开始压缩</span>
-              <span class="button-arrow" aria-hidden="true">→</span>
-            </button>
+
+            <div class="password-box hidden" id="password-box">
+              <div class="password-heading"><span class="lock-icon" aria-hidden="true">⌑</span><div><strong>设置 ZIP 密码</strong><small>采用兼容性更好的 ZipCrypto；密码只在本地使用。</small></div></div>
+              <div class="password-fields">
+                <label class="sr-only" for="archive-password">压缩密码</label>
+                <input id="archive-password" type="password" placeholder="输入密码" autocomplete="new-password" />
+                <label class="sr-only" for="archive-password-confirm">确认密码</label>
+                <input id="archive-password-confirm" type="password" placeholder="再次输入密码" autocomplete="new-password" />
+                <button class="icon-button" id="toggle-archive-password" type="button" aria-label="显示密码">◉</button>
+              </div>
+              <p class="security-note">ZipCrypto 适合日常分享兼容性场景，不建议用来保护高敏感资料。</p>
+            </div>
+
+            <div class="large-file-notice hidden" id="large-file-notice"><span aria-hidden="true">↗</span><span>文件总量较大，浏览器会使用后台压缩；请保持页面打开，最终 ZIP 仍需要占用一定内存。</span></div>
+            <button class="button button-primary button-wide" id="compress-button" type="button"><span class="button-label">开始压缩</span><span class="button-arrow" aria-hidden="true">→</span></button>
           </div>
         </div>
 
         <div class="panel" id="extract-panel" role="tabpanel" aria-labelledby="extract-tab" hidden>
           <div class="drop-zone" id="extract-drop-zone" tabindex="0" role="button" aria-describedby="extract-drop-hint">
-            <input id="extract-input" type="file" accept=".zip,application/zip" hidden />
+            <input id="extract-input" type="file" accept=".zip,.gz,.tgz,.tar,.tar.gz,.7z,.rar,application/zip,application/gzip" hidden />
             <div class="drop-illustration extract-illustration" aria-hidden="true">
               <span class="spark spark-left">✦</span>
-              <span class="upload-orb">
-                <svg viewBox="0 0 48 48"><path d="M24 13v20m0 0-8-8m8 8 8-8M10 37h28" /></svg>
-              </span>
+              <span class="upload-orb"><svg viewBox="0 0 48 48"><path d="M24 13v20m0 0-8-8m8 8 8-8M10 37h28" /></svg></span>
               <span class="spark spark-right">·</span>
             </div>
-            <h2>把 ZIP 拖到这里</h2>
-            <p id="extract-drop-hint">或点击选择一个 ZIP 压缩包</p>
-            <div class="drop-actions">
-              <button class="button button-primary" id="choose-zip" type="button">选择 ZIP 文件</button>
-            </div>
+            <h2>把压缩包拖到这里</h2>
+            <p id="extract-drop-hint">支持 ZIP、TAR、TAR.GZ 和 GZIP</p>
+            <div class="drop-actions"><button class="button button-primary" id="choose-archive" type="button">选择压缩包</button></div>
           </div>
 
           <div class="file-area hidden" id="extract-file-area">
             <div class="section-heading">
-              <div>
-                <p class="section-kicker">ZIP CONTENTS</p>
-                <h2>压缩包内容 <span class="count-pill" id="extract-count">0</span></h2>
-              </div>
+              <div><p class="section-kicker">ARCHIVE CONTENTS</p><h2>压缩包内容 <span class="count-pill" id="extract-count">0</span></h2></div>
               <button class="text-button" id="clear-extract" type="button">重新选择</button>
             </div>
             <div class="selected-archive" id="selected-archive"></div>
+            <p class="summary-line" id="extract-summary"></p>
+            <div class="password-box extract-password-box hidden" id="extract-password-box">
+              <div class="password-heading"><span class="lock-icon" aria-hidden="true">⌑</span><div><strong>这个 ZIP 需要密码</strong><small>输入密码后再解压；密码不会离开当前设备。</small></div></div>
+              <div class="password-fields"><label class="sr-only" for="extract-password">ZIP 密码</label><input id="extract-password" type="password" placeholder="输入 ZIP 密码" autocomplete="off" /><button class="icon-button" id="toggle-extract-password" type="button" aria-label="显示密码">◉</button></div>
+            </div>
             <div class="file-list extract-list" id="extract-file-list" aria-live="polite"></div>
-            <button class="button button-primary button-wide" id="extract-button" type="button">
-              <span class="button-label">解压全部文件</span>
-              <span class="button-arrow" aria-hidden="true">→</span>
-            </button>
-            <p class="microcopy" id="extract-note">解压后的文件会分别下载；如果浏览器询问，请允许多个文件下载。</p>
+            <div class="batch-actions">
+              <button class="button button-primary" id="extract-button" type="button"><span class="button-label">解压并下载全部</span><span class="button-arrow" aria-hidden="true">→</span></button>
+              <button class="button button-quiet hidden" id="extract-folder-button" type="button">选择文件夹保存</button>
+            </div>
+            <p class="microcopy" id="extract-note">可单独下载某个文件；批量下载时，浏览器可能会询问是否允许多个下载。</p>
           </div>
         </div>
 
         <div class="progress-area hidden" id="progress-area" aria-live="polite">
-          <div class="progress-topline">
-            <span id="progress-label">正在处理…</span>
-            <span class="mono" id="progress-percent">0%</span>
-          </div>
+          <div class="progress-topline"><span id="progress-label">正在处理…</span><span class="mono" id="progress-percent">0%</span></div>
           <div class="progress-track"><div class="progress-bar" id="progress-bar"></div></div>
-          <p id="progress-detail">请稍候，浏览器正在本地处理文件。</p>
+          <div class="progress-bottomline"><p id="progress-detail">请稍候，浏览器正在本地处理文件。</p><button class="text-button hidden" id="cancel-button" type="button">取消</button></div>
         </div>
 
-        <div class="message hidden" id="message" role="status">
-          <span class="message-icon" aria-hidden="true">✓</span>
-          <span id="message-text"></span>
-          <button class="message-close" id="message-close" type="button" aria-label="关闭提示">×</button>
-        </div>
+        <div class="message hidden" id="message" role="status"><span class="message-icon" aria-hidden="true">✓</span><span id="message-text"></span><button class="message-close" id="message-close" type="button" aria-label="关闭提示">×</button></div>
       </section>
 
       <section class="feature-strip" aria-label="工具特点">
-        <article class="feature-item">
-          <span class="feature-icon" aria-hidden="true">⌁</span>
-          <div><h3>本地处理</h3><p>文件不经过服务器</p></div>
-        </article>
-        <article class="feature-item">
-          <span class="feature-icon" aria-hidden="true">◎</span>
-          <div><h3>免费使用</h3><p>无需注册，不限次数</p></div>
-        </article>
-        <article class="feature-item">
-          <span class="feature-icon" aria-hidden="true">↗</span>
-          <div><h3>随时下载</h3><p>处理完成立即保存</p></div>
-        </article>
+        <article class="feature-item"><span class="feature-icon" aria-hidden="true">⌁</span><div><h3>本地处理</h3><p>文件不经过服务器</p></div></article>
+        <article class="feature-item"><span class="feature-icon" aria-hidden="true">◌</span><div><h3>格式更全</h3><p>ZIP、GZ、TAR、TAR.GZ</p></div></article>
+        <article class="feature-item"><span class="feature-icon" aria-hidden="true">↗</span><div><h3>批量保存</h3><p>逐个下载或保存到文件夹</p></div></article>
       </section>
 
-      <p class="footer-note">轻压 v0.1 · 当前支持 ZIP 格式 · 适合现代浏览器</p>
+      <p class="footer-note">轻压 v0.2 · 纯静态网页 · 支持离线打开</p>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js" defer></script>
-    <script src="app.js" defer></script>
+    <script src="./vendor/fflate.min.js" defer></script>
+    <script src="./vendor/jszip.min.js" defer></script>
+    <script src="./archive-codecs.js" defer></script>
+    <script src="./app.js" defer></script>
   </body>
 </html>
