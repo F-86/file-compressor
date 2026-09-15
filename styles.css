@@ -136,7 +136,7 @@ button { cursor: pointer; }
 .button:hover { transform: translateY(-1px); }
 .button:active { transform: translateY(0); }
 .button:disabled { cursor: wait; transform: none; }
-.button:focus-visible, .text-button:focus-visible, .message-close:focus-visible, .mode-tab:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .button-primary { color: #182111; background: var(--accent); box-shadow: 0 7px 18px rgba(197, 243, 107, .11); }
 .button-primary:hover { background: #d1fb7c; }
 .button-quiet { border-color: var(--line-bright); color: var(--muted); background: rgba(255, 255, 255, .02); }

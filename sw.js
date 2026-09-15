@@ -1,12 +1,14 @@
-const CACHE_NAME = "light-pressure-v0.2";
+const CACHE_NAME = "light-pressure-v0.4";
 const LOCAL_ASSETS = [
   "./",
   "./index.html",
   "./styles.css",
+  "./favicon.svg",
   "./app.js",
   "./archive-codecs.js",
   "./vendor/fflate.min.js",
-  "./vendor/jszip.min.js",
+  "./vendor/zip.min.js",
+  "./advanced-archive.js",
 ];
 
 self.addEventListener("install", (event) => {

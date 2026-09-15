@@ -5,19 +5,22 @@
 ## 当前功能
 
 - 多文件压缩为 ZIP
-- ZIP 密码保护（ZipCrypto，兼容 7-Zip、WinRAR 等常见工具）
+- AES-256 ZIP 密码保护（兼容 7-Zip、WinRAR、WinZip 等常见工具）
 - GZIP、TAR、TAR.GZ 压缩与解压
+- 7Z、RAR 解压（本地 WASM 引擎，首次使用时按需加载）
 - 选择文件夹并保留目录结构
 - ZIP、TAR、GZIP 内容预览
-- 单个文件下载、批量下载、支持 File System Access API 的浏览器中选择目标文件夹保存
-- 本地依赖和 Service Worker 缓存，首次打开后可离线使用
-- 大文件提示、后台压缩/解压和取消操作
+- 单个文件下载、批量打包为一个 ZIP 下载；支持 File System Access API 的浏览器中选择目标文件夹保存
+- 本地依赖和 Service Worker 缓存；7Z/RAR 解码引擎按需加载，使用后可离线复用
+- 大文件提示；ZIP 读写使用 Blob/Worker 流式路径，7Z/RAR 解码放在 Worker 中；支持逐项处理和取消操作
 
 ## 格式说明
 
-ZIP 密码功能使用 ZipCrypto，重点是跨软件兼容性；它不是 AES-256，不适合高敏感资料。AES 加密 ZIP、分卷 ZIP 暂不支持。
+新建密码 ZIP 默认使用 WinZip AES-256（AE-2），密码不会写入文件名或明文校验值。页面仍可读取历史 ZipCrypto ZIP，但 ZipCrypto 本身不安全，不建议用于敏感资料。
 
-当前页面会识别 7Z 和 RAR，并给出明确提示，但没有把大型 WASM 解码引擎塞进基础页面，因此这两个格式暂未解压。后续可以作为单独的可选模块加入。
+7Z 和 RAR 使用本地 libarchive WASM 引擎解压，文件不会上传。WASM 只在选择这两类文件时按需加载；支持 RAR v4/v5、常见 7Z 压缩方法。分卷 ZIP/RAR、带密码的加密文件以及极端大的归档仍受浏览器可用内存限制。
+
+批量解压默认生成一个新的 ZIP 下载，避免浏览器拦截多个自动下载。Chromium 系浏览器在支持 File System Access API 时，还可以直接选择目标文件夹保存；其他浏览器请使用批量 ZIP 下载。
 
 ## 本地运行
 
@@ -37,4 +40,4 @@ python3 -m http.server 8080
 
 ## 依赖许可
 
-`vendor/jszip.min.js` 和 `vendor/JSZIP-LICENSE.markdown` 来自 JSZip；`vendor/fflate.min.js` 和 `vendor/FFLATE-LICENSE` 来自 fflate。两者均随项目本地提供，页面不依赖 CDN 才能完成核心处理。
+`vendor/zip.min.js` 和 `vendor/ZIPJS-LICENSE` 来自 zip.js；`vendor/libarchive.js`、`vendor/libarchive-worker.js`、`vendor/libarchive.wasm` 和 `vendor/LIBARCHIVE-LICENSE` 来自 libarchive.js；`vendor/fflate.min.js` 和 `vendor/FFLATE-LICENSE` 来自 fflate。依赖均随项目本地提供，页面不依赖 CDN 才能完成处理。

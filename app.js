@@ -2,7 +2,6 @@
   "use strict";
 
   const LARGE_FILE_BYTES = 200 * 1024 * 1024;
-  const UNSUPPORTED_FORMATS = new Set(["7z", "rar"]);
   const state = {
     mode: "compress",
     files: [],
@@ -64,7 +63,7 @@
 
   const formatInfo = {
     zip: { extension: ".zip", label: "ZIP" },
-    "zip-password": { extension: ".zip", label: "ZIP" },
+    "zip-password": { extension: ".zip", label: "ZIP AES-256" },
     "tar-gz": { extension: ".tar.gz", label: "TAR.GZ" },
     tar: { extension: ".tar", label: "TAR" },
     gzip: { extension: ".gz", label: "GZIP" },
@@ -85,7 +84,7 @@
   function safeArchiveName(name) {
     const cleaned = String(name || "")
       .trim()
-      .replace(/\.(zip|tar\.gz|tgz|tar|gz)$/i, "")
+      .replace(/\.(zip|7z|rar|tar\.gz|tgz|tar|gz)$/i, "")
       .replace(/[\\/:*?"<>|]/g, "-");
     return cleaned || "轻压文件";
   }
@@ -105,6 +104,36 @@
       .split("/")
       .filter((part) => part && part !== "." && part !== "..")
       .map((part) => part.replace(/[\0\x00-\x1f<>:"/\\|?*]/g, "_").replace(/[. ]+$/g, "") || "_");
+  }
+
+  function safeArchiveEntryName(path, fallback = "未命名文件") {
+    const safe = safePathParts(path).join("/");
+    return safe || fallback;
+  }
+
+  function archiveNeedsPassword(archive) {
+    return Boolean(archive?.encrypted || archive?.entries.some((entry) => entry.encryption && entry.encryption !== "none"));
+  }
+
+  function closeArchiveEngine(archive) {
+    if (!archive) return;
+    if (archive.zipReader && typeof archive.zipReader.close === "function") archive.zipReader.close().catch(() => {});
+    if (archive.advancedArchive && typeof archive.advancedArchive.close === "function") archive.advancedArchive.close().catch(() => {});
+  }
+
+  function normalizeArchiveError(error) {
+    if (error?.name === "AbortError" || error?.code === "ERR_ABORTED") {
+      const cancelled = new Error("操作已取消");
+      cancelled.code = "CANCELLED";
+      return cancelled;
+    }
+    const message = String(error?.message || error || "");
+    if (/invalid password|incorrect password|wrong password|bad password|invalid passphrase|incorrect passphrase|wrong passphrase/i.test(message)) {
+      const passwordError = new Error("密码不正确，或这个压缩包使用了不兼容的加密方式");
+      passwordError.code = "PASSWORD_INVALID";
+      return passwordError;
+    }
+    return error;
   }
 
   function setMode(mode) {
@@ -128,10 +157,11 @@
     button.disabled = busy;
     button.setAttribute("aria-busy", String(busy));
     const text = button.querySelector(".button-label");
-    if (text) text.textContent = busy ? label : button.id === "compress-button" ? "开始压缩" : "解压并下载全部";
+    if (text) text.textContent = busy ? label : button.id === "compress-button" ? "开始压缩" : "解压并下载 ZIP";
     button.style.opacity = busy ? "0.72" : "1";
     if (button.id === "extract-button") {
       elements.extractFolderButton.disabled = busy;
+      elements.extractFolderButton.setAttribute("aria-busy", String(busy));
       elements.extractFolderButton.style.opacity = busy ? "0.72" : "1";
     }
   }
@@ -151,6 +181,7 @@
   function showProgress(label, detail) {
     elements.progressLabel.textContent = label;
     elements.progressDetail.textContent = detail || "请稍候，浏览器正在本地处理文件。";
+    elements.progress.setAttribute("aria-busy", "true");
     elements.progress.classList.remove("hidden");
     elements.cancelButton.classList.remove("hidden");
     setProgress(0);
@@ -164,6 +195,7 @@
   }
 
   function hideProgress() {
+    elements.progress.setAttribute("aria-busy", "false");
     elements.progress.classList.add("hidden");
     elements.cancelButton.classList.add("hidden");
   }
@@ -220,10 +252,6 @@
     window.setTimeout(() => URL.revokeObjectURL(url), 1500);
   }
 
-  function wait(milliseconds) {
-    return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
-  }
-
   function escapeHtml(value) {
     return String(value).replace(/[&<>'"]/g, (character) => ({
       "&": "&amp;",
@@ -271,7 +299,7 @@
   }
 
   function formatLabel(format) {
-    return { zip: "ZIP", gzip: "GZIP", "tar-gz": "TAR.GZ", tar: "TAR" }[format] || format.toUpperCase();
+    return { zip: "ZIP", "zip-password": "ZIP AES-256", gzip: "GZIP", "tar-gz": "TAR.GZ", tar: "TAR" }[format] || format.toUpperCase();
   }
 
   function renderExtractFiles() {
@@ -308,7 +336,9 @@
     if (large) {
       const deviceMemory = Number(navigator.deviceMemory);
       const deviceHint = Number.isFinite(deviceMemory) && deviceMemory > 0 ? `当前设备约有 ${deviceMemory} GB 内存可供浏览器使用。` : "不同浏览器可用内存不同。";
-      elements.largeFileCopy.textContent = `文件总量较大，浏览器会使用后台压缩；请保持页面打开，最终文件仍会占用一定内存。${deviceHint}`;
+      const format = elements.archiveFormat.value;
+      const processingHint = format === "zip" || format === "zip-password" ? "ZIP 会逐文件读取并在后台压缩；" : "当前格式需要暂存更多数据；";
+      elements.largeFileCopy.textContent = `文件总量较大，${processingHint}请保持页面打开，最终文件仍会占用一定内存。${deviceHint}`;
     }
   }
 
@@ -349,6 +379,44 @@
     return entries;
   }
 
+  async function createZipWithZipJs(files, password, level) {
+    if (!window.zip) throw new Error("安全 ZIP 引擎还没有加载完成，请刷新页面后重试");
+    const outputWriter = new window.zip.BlobWriter("application/zip");
+    const zipWriter = new window.zip.ZipWriter(outputWriter, { useWebWorkers: true });
+    const abortController = typeof AbortController === "function" ? new AbortController() : null;
+    let closed = false;
+    state.operationCancel = () => abortController?.abort();
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        checkCancelled();
+        const file = files[index];
+        const entryName = safeArchiveEntryName(filePath(file), file.name);
+        elements.progressDetail.textContent = `正在压缩：${entryName}`;
+        const options = {
+          level,
+          onprogress: (current, maximum) => {
+            const fraction = maximum > 0 ? current / maximum : 0.5;
+            setProgress(8 + ((index + Math.min(1, fraction)) / files.length) * 84);
+          },
+        };
+        if (abortController) options.signal = abortController.signal;
+        if (password) {
+          options.password = password;
+          options.encryptionStrength = 3;
+        }
+        await zipWriter.add(entryName, new window.zip.BlobReader(file), options);
+        setProgress(8 + ((index + 1) / files.length) * 84);
+        await yieldToBrowser();
+      }
+      await zipWriter.close();
+      closed = true;
+      return outputWriter.getData();
+    } catch (error) {
+      if (!closed) await zipWriter.close().catch(() => {});
+      throw normalizeArchiveError(error);
+    }
+  }
+
   function updateFormatUI() {
     const format = elements.archiveFormat.value;
     const info = formatInfo[format];
@@ -359,6 +427,7 @@
     } else {
       elements.archiveName.placeholder = "例如：轻压文件";
     }
+    if (state.files.length) syncCompressArea();
   }
 
   async function compressFiles() {
@@ -370,8 +439,8 @@
       return;
     }
     if (format === "zip-password") {
-      if (password.length < 4) {
-        showMessage("密码至少需要 4 个字符。", "error");
+      if (password.length < 8) {
+        showMessage("AES-256 密码至少需要 8 个字符。", "error");
         elements.archivePassword.focus();
         return;
       }
@@ -391,41 +460,40 @@
     showProgress("正在准备文件…", "文件不会上传，压缩过程在本地浏览器中完成。");
     let entries = [];
     try {
-      entries = await readFiles();
-      checkCancelled();
       const level = Number(elements.compressionLevel.value);
       const setCancel = (cancel) => { state.operationCancel = cancel; };
-      let bytes;
+      let output;
       let extension = formatInfo[format].extension;
-      if (format === "zip-password") {
-        bytes = await window.LightPressureCodecs.createPasswordZip(entries, password, level, setCancel, (percent) => {
-          setProgress(27 + percent * 0.73);
-        }, (entry) => { entry.data = null; });
-      } else if (format === "zip") {
-        bytes = await window.LightPressureCodecs.createZip(entries, level, setCancel);
-        releaseEntries(entries);
-        setProgress(100);
-      } else if (format === "tar") {
-        bytes = window.LightPressureCodecs.createTar(entries);
-        releaseEntries(entries);
-        setProgress(100);
-      } else if (format === "tar-gz") {
-        const tarBytes = window.LightPressureCodecs.createTar(entries);
-        releaseEntries(entries);
-        setProgress(35);
-        bytes = await window.LightPressureCodecs.createGzip(tarBytes, `${safeArchiveName(elements.archiveName.value)}.tar`, level, setCancel);
+      if (format === "zip" || format === "zip-password") {
+        output = await createZipWithZipJs(state.files, format === "zip-password" ? password : "", level);
         setProgress(100);
       } else {
-        bytes = await window.LightPressureCodecs.createGzip(entries[0].data, entries[0].name, level, setCancel);
-        releaseEntries(entries);
-        extension = ".gz";
-        setProgress(100);
+        entries = await readFiles();
+        checkCancelled();
+        if (format === "tar") {
+          output = window.LightPressureCodecs.createTar(entries);
+          releaseEntries(entries);
+          setProgress(100);
+        } else if (format === "tar-gz") {
+          const tarBytes = window.LightPressureCodecs.createTar(entries);
+          releaseEntries(entries);
+          setProgress(35);
+          output = await window.LightPressureCodecs.createGzip(tarBytes, `${safeArchiveName(elements.archiveName.value)}.tar`, level, setCancel);
+          setProgress(100);
+        } else {
+          output = await window.LightPressureCodecs.createGzip(entries[0].data, entries[0].name, level, setCancel);
+          releaseEntries(entries);
+          extension = ".gz";
+          setProgress(100);
+        }
       }
       checkCancelled();
-      createDownload(bytes, `${safeArchiveName(elements.archiveName.value)}${extension}`, "application/octet-stream");
-      showMessage(`压缩完成，已准备下载 ${formatLabel(format)} 文件（${formatBytes(bytes.length)}）。`);
+      const outputSize = output instanceof Blob ? output.size : output.length;
+      createDownload(output, `${safeArchiveName(elements.archiveName.value)}${extension}`, "application/octet-stream");
+      showMessage(`压缩完成，已准备下载 ${formatLabel(format)} 文件（${formatBytes(outputSize)}）。`);
     } catch (error) {
-      if (error.code !== "CANCELLED") showMessage(`压缩失败：${error.message || "请稍后重试"}`, "error");
+      const normalizedError = normalizeArchiveError(error);
+      if (normalizedError.code !== "CANCELLED") showMessage(`压缩失败：${normalizedError.message || "请稍后重试"}`, "error");
     } finally {
       const wasCancelled = state.cancelled;
       releaseEntries(entries);
@@ -436,12 +504,55 @@
   }
 
   function resetArchive() {
+    closeArchiveEngine(state.archive);
     state.archive = null;
     elements.extractList.replaceChildren();
     elements.extractPassword.value = "";
     elements.extractPasswordBox.classList.add("hidden");
     syncExtractArea();
     hideMessage();
+  }
+
+  async function openZipArchive(file) {
+    if (!window.zip) throw new Error("ZIP 引擎还没有加载完成，请刷新页面后重试");
+    const zipReader = new window.zip.ZipReader(new window.zip.BlobReader(file), { strictness: "balanced" });
+    try {
+      const sourceEntries = await zipReader.getEntries();
+      const entries = sourceEntries.map((source) => ({
+        name: safeArchiveEntryName(source.filename),
+        size: source.uncompressedSize ?? 0,
+        source,
+        kind: "zipjs",
+        directory: Boolean(source.directory),
+        encryption: source.encrypted ? "zip" : "none",
+      }));
+      return { zipReader, entries, encrypted: entries.some((entry) => entry.encryption !== "none") };
+    } catch (error) {
+      await zipReader.close().catch(() => {});
+      throw normalizeArchiveError(error);
+    }
+  }
+
+  async function openAdvancedArchive(file) {
+    if (!window.LightPressureAdvanced) throw new Error("7Z/RAR 解码引擎还没有加载完成，请刷新页面后重试");
+    elements.progressDetail.textContent = "正在加载 7Z/RAR 解码引擎（首次使用可能需要一点时间）";
+    const advancedArchive = await window.LightPressureAdvanced.open(file);
+    try {
+      const sourceEntries = await advancedArchive.getFilesArray();
+      const encrypted = await advancedArchive.hasEncryptedData();
+      const entries = sourceEntries.map(({ file: source, path }) => ({
+        name: safeArchiveEntryName(`${path || ""}${source.name}`),
+        size: source.size ?? 0,
+        source,
+        kind: "libarchive",
+        directory: false,
+        encryption: encrypted === true ? "advanced" : "none",
+      }));
+      return { advancedArchive, entries, encrypted: encrypted === true };
+    } catch (error) {
+      await advancedArchive.close().catch(() => {});
+      throw normalizeArchiveError(error);
+    }
   }
 
   async function loadArchive(file) {
@@ -454,29 +565,40 @@
     beginOperation();
     showProgress("正在读取压缩包…", "正在检查压缩包内容，全程在本地完成。");
     try {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      setProgress(12);
-      const detected = window.LightPressureCodecs.detectFormat(bytes, file.name);
-      if (UNSUPPORTED_FORMATS.has(detected)) {
-        const name = detected === "7z" ? "7Z" : "RAR";
-        throw Object.assign(new Error(`检测到 ${name} 格式；当前离线版已支持 ZIP、TAR、TAR.GZ 和 GZIP，${name} 需要额外的 WASM 引擎。`), { code: "UNSUPPORTED_FORMAT" });
-      }
-      if (detected === "unknown") throw Object.assign(new Error("暂不认识这个文件格式，请选择 ZIP、TAR、TAR.GZ 或 GZIP。"), { code: "UNSUPPORTED_FORMAT" });
-      const archive = { file, bytes, innerBytes: null, format: detected, entries: [] };
+      const header = new Uint8Array(await file.slice(0, 512).arrayBuffer());
+      setProgress(5);
+      const detected = window.LightPressureCodecs.detectFormat(header, file.name);
+      if (detected === "unknown") throw Object.assign(new Error("暂不认识这个文件格式，请选择 ZIP、7Z、RAR、TAR、TAR.GZ 或 GZIP。"), { code: "UNSUPPORTED_FORMAT" });
+      const archive = { file, bytes: null, innerBytes: null, format: detected, entries: [], encrypted: false, engine: "native" };
       if (detected === "zip") {
-        archive.entries = window.LightPressureCodecs.parseZip(bytes);
+        const zipArchive = await openZipArchive(file);
+        archive.engine = "zipjs";
+        archive.zipReader = zipArchive.zipReader;
+        archive.entries = zipArchive.entries;
+        archive.encrypted = zipArchive.encrypted;
         setProgress(100);
-      } else if (detected === "tar") {
-        archive.entries = window.LightPressureCodecs.parseTar(bytes);
+      } else if (detected === "7z" || detected === "rar") {
+        const advanced = await openAdvancedArchive(file);
+        archive.engine = "libarchive";
+        archive.advancedArchive = advanced.advancedArchive;
+        archive.entries = advanced.entries;
+        archive.encrypted = advanced.encrypted;
         setProgress(100);
       } else {
-        archive.innerBytes = await window.LightPressureCodecs.gunzip(bytes, (cancel) => { state.operationCancel = cancel; });
-        archive.format = window.LightPressureCodecs.isTar(archive.innerBytes) ? "tar-gz" : "gzip";
-        if (archive.format === "tar-gz") {
-          archive.entries = window.LightPressureCodecs.parseTar(archive.innerBytes);
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        archive.bytes = bytes;
+        setProgress(12);
+        if (detected === "tar") {
+          archive.entries = window.LightPressureCodecs.parseTar(bytes);
         } else {
-          const fallbackName = file.name.replace(/\.gz$/i, "") || "解压文件";
-          archive.entries = [{ name: window.LightPressureCodecs.parseGzipFilename(bytes) || fallbackName, size: archive.innerBytes.length, data: archive.innerBytes, kind: "raw", directory: false, encryption: "none" }];
+          archive.innerBytes = await window.LightPressureCodecs.gunzip(bytes, (cancel) => { state.operationCancel = cancel; });
+          archive.format = window.LightPressureCodecs.isTar(archive.innerBytes) ? "tar-gz" : "gzip";
+          if (archive.format === "tar-gz") {
+            archive.entries = window.LightPressureCodecs.parseTar(archive.innerBytes);
+          } else {
+            const fallbackName = file.name.replace(/\.gz$/i, "") || "解压文件";
+            archive.entries = [{ name: safeArchiveEntryName(window.LightPressureCodecs.parseGzipFilename(bytes) || fallbackName), size: archive.innerBytes.length, data: archive.innerBytes, kind: "raw", directory: false, encryption: "none" }];
+          }
         }
         setProgress(100);
       }
@@ -485,39 +607,174 @@
       elements.selectedArchive.textContent = file.name;
       elements.selectedArchive.dataset.format = archive.format;
       renderExtractFiles();
-      elements.extractPasswordBox.classList.toggle("hidden", !archive.entries.some((entry) => entry.encryption === "zipcrypto"));
+      const encrypted = archiveNeedsPassword(archive);
+      elements.extractPasswordBox.classList.toggle("hidden", !encrypted);
       syncExtractArea();
-      const encrypted = archive.entries.some((entry) => entry.encryption === "zipcrypto");
-      const aes = archive.entries.some((entry) => entry.encryption === "aes");
-      if (aes) showMessage("已读取压缩包，但其中包含 AES 加密条目；当前离线版支持 ZipCrypto 密码 ZIP。", "error");
-      else showMessage(`已读取 ${archiveEntries().length} 个文件${encrypted ? "，请输入密码后解压" : "，可以开始解压"}。`);
+      showMessage(`已读取 ${archiveEntries().length} 个文件${encrypted ? "，这个压缩包需要密码才能解压" : "，可以开始解压"}。`);
     } catch (error) {
-      if (error.code !== "CANCELLED") showMessage(error.message || "无法读取这个压缩包。", "error");
+      const normalizedError = normalizeArchiveError(error);
+      if (normalizedError.code !== "CANCELLED") showMessage(normalizedError.message || "无法读取这个压缩包。", "error");
       resetArchive();
     } finally {
+      const wasCancelled = state.cancelled;
       finishOperation();
-      window.setTimeout(hideProgress, 650);
+      if (!wasCancelled) window.setTimeout(hideProgress, 650);
     }
   }
 
   async function readArchiveEntry(entry) {
     checkCancelled();
-    const setCancel = (cancel) => { state.operationCancel = cancel; };
     if (entry.kind === "raw") return entry.data;
     if (entry.kind === "tar") return state.archive.innerBytes ? state.archive.innerBytes.slice(entry.dataOffset, entry.dataOffset + entry.size) : state.archive.bytes.slice(entry.dataOffset, entry.dataOffset + entry.size);
-    return window.LightPressureCodecs.extractZipEntry(state.archive.bytes, entry, elements.extractPassword.value, setCancel);
+    if (entry.kind === "zipjs") {
+      const password = archiveEntryPassword(entry);
+      try {
+        return new Uint8Array(await entry.source.arrayBuffer({ password }));
+      } catch (error) {
+        throw normalizeArchiveError(error);
+      }
+    }
+    if (entry.kind === "libarchive") {
+      const file = await extractAdvancedFile(entry);
+      return new Uint8Array(await file.arrayBuffer());
+    }
+    return window.LightPressureCodecs.extractZipEntry(state.archive.bytes, entry, elements.extractPassword.value, (cancel) => { state.operationCancel = cancel; });
   }
 
-  async function writeToDirectory(rootHandle, path, data) {
+  function archiveEntryPassword(entry) {
+    if (entry.encryption === "none") return undefined;
+    const password = elements.extractPassword.value;
+    if (!password) throw Object.assign(new Error("请输入压缩包密码后再解压。"), { code: "PASSWORD_REQUIRED" });
+    return password;
+  }
+
+  async function extractAdvancedFile(entry) {
+    try {
+      if (entry.encryption !== "none") await state.archive.advancedArchive.usePassword(archiveEntryPassword(entry));
+      return await entry.source.extract();
+    } catch (error) {
+      throw normalizeArchiveError(error);
+    }
+  }
+
+  async function getDirectoryFileHandle(rootHandle, path) {
     const parts = safePathParts(path);
-    if (!parts.length) return;
+    if (!parts.length) return null;
     const fileName = parts.pop();
     let directory = rootHandle;
     for (const part of parts) directory = await directory.getDirectoryHandle(part, { create: true });
-    const fileHandle = await directory.getFileHandle(fileName, { create: true });
+    return directory.getFileHandle(fileName, { create: true });
+  }
+
+  function entryProgress(index, total, current, maximum) {
+    const fraction = maximum > 0 ? Math.min(1, current / maximum) : 0.5;
+    setProgress(((index + fraction) / total) * 90);
+  }
+
+  async function writeArchiveEntryToDirectory(rootHandle, entry, index, total, abortController) {
+    const fileHandle = await getDirectoryFileHandle(rootHandle, entry.name);
+    if (!fileHandle) return;
     const writable = await fileHandle.createWritable();
-    await writable.write(new Blob([data]));
-    await writable.close();
+    let closed = false;
+    try {
+      if (entry.kind === "zipjs" && typeof WritableStream === "function") {
+        const stream = new WritableStream({
+          write: (chunk) => writable.write(chunk),
+          close: async () => {
+            await writable.close();
+            closed = true;
+          },
+          abort: async (reason) => {
+            try {
+              await writable.abort(reason);
+            } finally {
+              closed = true;
+            }
+          },
+        });
+        await entry.source.getData(stream, {
+          password: archiveEntryPassword(entry),
+          onprogress: (current, maximum) => entryProgress(index, total, current, maximum),
+          ...(abortController ? { signal: abortController.signal } : {}),
+        });
+      } else if (entry.kind === "libarchive") {
+        const file = await extractAdvancedFile(entry);
+        await writable.write(file);
+        await writable.close();
+        closed = true;
+      } else {
+        const data = await readArchiveEntry(entry);
+        await writable.write(new Blob([data]));
+        await writable.close();
+        closed = true;
+      }
+    } catch (error) {
+      if (!closed) await writable.abort(error).catch(() => {});
+      throw normalizeArchiveError(error);
+    }
+  }
+
+  async function addArchiveEntryToZip(zipWriter, entry, index, total, abortController) {
+    const filename = safeArchiveEntryName(entry.name);
+    const addOptions = {
+      level: 0,
+      onprogress: (current, maximum) => entryProgress(index, total, current, maximum),
+      ...(abortController ? { signal: abortController.signal } : {}),
+    };
+    if (entry.kind === "zipjs" && typeof TransformStream === "function") {
+      const transform = new TransformStream();
+      let readPromise;
+      try {
+        readPromise = entry.source.getData(transform.writable, {
+          password: archiveEntryPassword(entry),
+          onprogress: (current, maximum) => entryProgress(index, total, current, maximum),
+          ...(abortController ? { signal: abortController.signal } : {}),
+        });
+        await Promise.all([
+          zipWriter.add(filename, transform.readable, addOptions),
+          readPromise,
+        ]);
+        return;
+      } catch (error) {
+        await transform.writable.abort(error).catch(() => {});
+        if (readPromise) await readPromise.catch(() => {});
+        throw normalizeArchiveError(error);
+      }
+    }
+    if (entry.kind === "libarchive") {
+      const file = await extractAdvancedFile(entry);
+      const reader = typeof file.stream === "function" ? file.stream() : new window.zip.Uint8ArrayReader(new Uint8Array(await file.arrayBuffer()));
+      await zipWriter.add(filename, reader, addOptions);
+      return;
+    }
+    const data = await readArchiveEntry(entry);
+    await zipWriter.add(filename, new window.zip.Uint8ArrayReader(data), addOptions);
+  }
+
+  async function createBatchZip(entries) {
+    if (!window.zip) throw new Error("ZIP 打包引擎还没有加载完成，请刷新页面后重试");
+    const outputWriter = new window.zip.BlobWriter("application/zip");
+    const zipWriter = new window.zip.ZipWriter(outputWriter, { useWebWorkers: true });
+    const abortController = typeof AbortController === "function" ? new AbortController() : null;
+    let closed = false;
+    state.operationCancel = () => abortController?.abort();
+    try {
+      for (let index = 0; index < entries.length; index += 1) {
+        checkCancelled();
+        const entry = entries[index];
+        await addArchiveEntryToZip(zipWriter, entry, index, entries.length, abortController);
+        setProgress(((index + 1) / entries.length) * 90);
+        elements.progressDetail.textContent = `已打包 ${index + 1} / ${entries.length} 个文件`;
+        await yieldToBrowser();
+      }
+      await zipWriter.close();
+      closed = true;
+      setProgress(100);
+      return outputWriter.getData();
+    } catch (error) {
+      if (!closed) await zipWriter.close().catch(() => {});
+      throw normalizeArchiveError(error);
+    }
   }
 
   async function extractSingle(index) {
@@ -533,7 +790,8 @@
       setProgress(100);
       showMessage(`已开始下载：${entry.name}`);
     } catch (error) {
-      if (error.code !== "CANCELLED") showMessage(error.message || "这个文件无法解压。", "error");
+      const normalizedError = normalizeArchiveError(error);
+      if (normalizedError.code !== "CANCELLED") showMessage(normalizedError.message || "这个文件无法解压。", "error");
     } finally {
       const wasCancelled = state.cancelled;
       finishOperation();
@@ -544,40 +802,44 @@
   async function extractAll(toFolder = false) {
     const entries = archiveEntries();
     if (!entries.length) return;
-    if (state.archive.entries.some((entry) => entry.encryption === "zipcrypto") && !elements.extractPassword.value) {
-      showMessage("请输入 ZIP 密码后再解压。", "error");
+    if (archiveNeedsPassword(state.archive) && !elements.extractPassword.value) {
+      showMessage("请输入压缩包密码后再解压。", "error");
       elements.extractPassword.focus();
       return;
     }
     beginOperation();
     setBusy(elements.extractButton, true, "正在解压…");
     showProgress("正在解压文件…", "正在读取压缩包内容，全程在本地完成。");
+    const abortController = typeof AbortController === "function" ? new AbortController() : null;
+    state.operationCancel = () => abortController?.abort();
     let rootHandle = null;
     try {
       if (toFolder) {
         rootHandle = await window.showDirectoryPicker({ mode: "readwrite", id: "light-pressure-output" });
-      }
-      for (let index = 0; index < entries.length; index += 1) {
-        checkCancelled();
-        const entry = entries[index];
-        const data = await readArchiveEntry(entry);
-        if (rootHandle) {
-          await writeToDirectory(rootHandle, entry.name, data);
-        } else {
-          createDownload(data, safeFileName(entry.name));
-          await wait(120);
+        for (let index = 0; index < entries.length; index += 1) {
+          checkCancelled();
+          const entry = entries[index];
+          await writeArchiveEntryToDirectory(rootHandle, entry, index, entries.length, abortController);
+          setProgress(((index + 1) / entries.length) * 100);
+          elements.progressDetail.textContent = `已保存 ${index + 1} / ${entries.length} 个文件`;
+          await yieldToBrowser();
         }
-        setProgress(((index + 1) / entries.length) * 100);
-        elements.progressDetail.textContent = `已处理 ${index + 1} / ${entries.length} 个文件`;
-        await yieldToBrowser();
+        showMessage("解压完成，文件已保存到你选择的文件夹。");
+      } else {
+        const output = await createBatchZip(entries);
+        checkCancelled();
+        createDownload(output, `${safeArchiveName(state.archive.file.name)}-解压结果.zip`, "application/zip");
+        showMessage(`解压完成，已将 ${entries.length} 个文件打包为一个 ZIP 下载。`);
       }
-      showMessage(rootHandle ? "解压完成，文件已保存到你选择的文件夹。" : "解压完成，文件已开始分别下载。");
     } catch (error) {
       if (error.name === "AbortError") showMessage("已取消选择保存文件夹。", "error");
-      else if (error.code !== "CANCELLED") showMessage(error.message || "解压失败，请检查密码或文件完整性。", "error");
+      else {
+        const normalizedError = normalizeArchiveError(error);
+        if (normalizedError.code !== "CANCELLED") showMessage(normalizedError.message || "解压失败，请检查密码或文件完整性。", "error");
+      }
     } finally {
       const wasCancelled = state.cancelled;
-      setBusy(elements.extractButton, false, "解压并下载全部");
+      setBusy(elements.extractButton, false, "解压并下载 ZIP");
       finishOperation();
       if (!wasCancelled) window.setTimeout(hideProgress, 1100);
     }
@@ -591,6 +853,7 @@
   }
 
   function wireDropZone(zone, input, onFiles) {
+    zone.tabIndex = 0;
     ["dragenter", "dragover"].forEach((eventName) => zone.addEventListener(eventName, (event) => {
       event.preventDefault();
       zone.classList.add("drag-over");
@@ -602,6 +865,11 @@
     zone.addEventListener("drop", (event) => onFiles(event.dataTransfer.files));
     zone.addEventListener("click", (event) => {
       if (!event.target.closest("button")) input.click();
+    });
+    zone.addEventListener("keydown", (event) => {
+      if (event.target !== zone || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      input.click();
     });
   }
 
